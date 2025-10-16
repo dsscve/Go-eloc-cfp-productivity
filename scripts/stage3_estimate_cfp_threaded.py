@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Stage 3 – Estimate COSMIC Function Points (CFP) using data movement detection.
+Stage 3 – COSMIC Function Points (CFP) estimation for Go repositories.
 
 Adds derived metrics:
   - cfp_total     : total detected data movements
@@ -34,6 +34,9 @@ PATTERNS = {
         r"\bRegister.*Server",
         r"\bhttp\.HandleFunc",
         r"\bgrpc\.NewServer",
+        r"\bchi\.NewRouter",
+        r"\bfiber\.New",
+        r"\bgin\.Default",
     ],
     "exit": [
         r"\bctx\.JSON",
@@ -41,21 +44,24 @@ PATTERNS = {
         r"\bhttp\.ResponseWriter",
         r"\breturn\s+json",
         r"\breturn\s+fmt\.Sprintf",
+        r"\btemplate\.Execute",
+        r"\brender\.(HTML|JSON|Template)",
     ],
     "read": [
-        r"\bdb\.(Find|Select|Query|QueryRow|QueryRows)",
+        r"\bdb\.(Find|Select|Query|QueryRow|QueryRows|First|Where)",
         r"\bread.*File",
         r"\bios\.Open",
         r"\bjson\.Unmarshal",
+        r"\bioutil\.ReadFile",
     ],
     "write": [
-        r"\bdb\.(Create|Save|Exec|Update|Insert)",
+        r"\bdb\.(Create|Save|Exec|Update|Insert|SaveChanges)",
         r"\bwrite.*File",
         r"\bios\.Write",
         r"\bjson\.Marshal",
+        r"\bioutil\.WriteFile",
     ],
 }
-
 
 # ----------------------------------------------------------
 # Functions
@@ -64,17 +70,20 @@ def detect_movements(repo_path):
     """Scan a Go repository and count COSMIC movement types."""
     counts = {k: 0 for k in PATTERNS}
     for root, _, files in os.walk(repo_path):
+        # Skip vendor, third-party, or generated directories
+        if any(skip in root for skip in ["vendor", "third_party", "generated"]):
+            continue
         for f in files:
-            if not f.endswith(".go"):
+            if not f.endswith(".go") or f.endswith("_test.go"):
                 continue
             try:
                 with open(os.path.join(root, f), "r", encoding="utf-8", errors="ignore") as src:
                     text = src.read()
                     for move, patterns in PATTERNS.items():
                         for p in patterns:
-                            counts[move] += len(re.findall(p, text))
+                            counts[move] += len(re.findall(p, text, re.IGNORECASE))
             except Exception:
-                pass
+                continue
     return counts
 
 
@@ -87,12 +96,12 @@ def process_repo(row):
 
     movements = detect_movements(repo_path)
     total_cfp = sum(movements.values())
+
     total_eloc = row.get("total_eloc", row.get("total", 0))
     code = row.get("code", 0)
 
-    # Derived metrics
-    eloc_per_cfp = total_eloc / total_cfp if total_cfp > 0 else 0
-    cfp_per_kloc = (total_cfp / code * 1000) if code > 0 else 0
+    eloc_per_cfp = round(total_eloc / total_cfp, 2) if total_cfp else 0
+    cfp_per_kloc = round(total_cfp / code * 1000, 2) if code else 0
 
     return {
         "repo": repo_name,
@@ -102,8 +111,8 @@ def process_repo(row):
         "total_eloc": total_eloc,
         **movements,
         "cfp_total": total_cfp,
-        "eloc_per_cfp": round(eloc_per_cfp, 2),
-        "cfp_per_kloc": round(cfp_per_kloc, 2),
+        "eloc_per_cfp": eloc_per_cfp,
+        "cfp_per_kloc": cfp_per_kloc,
     }
 
 
@@ -118,7 +127,8 @@ def main():
 
     print(f"🔍 Estimating COSMIC Function Points for {len(df)} repositories...")
 
-    with ThreadPoolExecutor(max_workers=os.cpu_count() * 2) as executor:
+    max_workers = min(32, os.cpu_count() * 2)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
         futures = {executor.submit(process_repo, row): idx for idx, row in df.iterrows()}
         for future in tqdm(as_completed(futures), total=len(futures)):
             res = future.result()
@@ -128,7 +138,7 @@ def main():
     final_df = pd.DataFrame(results)
     final_df.to_csv(OUTPUT_FILE, index=False)
     print(f"✅ COSMIC Function Points written to {OUTPUT_FILE}")
-    print(f"📊 Includes derived metrics: eloc_per_cfp, cfp_per_kloc")
+    print(f"📊 Includes metrics: cfp_total, eloc_per_cfp, cfp_per_kloc")
 
 
 if __name__ == "__main__":
