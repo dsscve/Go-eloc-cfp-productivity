@@ -1,0 +1,44 @@
+name: Go ELOC + COSMIC CFP Estimation
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 2 * * 0"
+
+jobs:
+  analyze:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y git cloc
+          pip install requests pandas tqdm
+
+      # -------------------------------
+      - name: Stage 1 – Fetch and clone Go repos
+        run: python scripts/stage1_fetch_repos.py
+
+      # -------------------------------
+      - name: Stage 2 – Measure ELOC with CLOC
+        run: python scripts/stage2_measure_eloc_cloc.py
+
+      # -------------------------------
+      - name: Stage 3 – Estimate COSMIC Function Points
+        run: python scripts/stage3_estimate_cfp_threaded.py
+
+      # -------------------------------
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: go_cfp_results
+          path: data/
