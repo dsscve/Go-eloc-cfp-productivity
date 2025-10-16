@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """
-Stage 3 – COSMIC Function Points (CFP) estimation for Go repositories.
+Stage 3 – Enhanced COSMIC Function Points (CFP) estimation for Go repositories.
 
-Adds derived metrics:
-  - cfp_total     : total detected data movements
-  - eloc_per_cfp  : effective lines of code per function point
-  - cfp_per_kloc  : function points per 1000 lines of code
+Improves CFP detection by:
+  - Counting exported functions as entry points
+  - Including channel sends/receives
+  - Counting goroutine spawns
+  - More comprehensive read/write/exit patterns
+  - Optional multipliers to better reflect data movement impact
 
 Outputs:
   - data/final_metrics.csv
@@ -23,7 +25,7 @@ INPUT_FILE = os.path.join(DATA_DIR, "eloc_metrics.csv")
 OUTPUT_FILE = os.path.join(DATA_DIR, "final_metrics.csv")
 
 # ----------------------------------------------------------
-# COSMIC Data Movement Patterns for Go
+# Enhanced COSMIC Data Movement Patterns for Go
 # ----------------------------------------------------------
 PATTERNS = {
     "entry": [
@@ -37,6 +39,7 @@ PATTERNS = {
         r"\bchi\.NewRouter",
         r"\bfiber\.New",
         r"\bgin\.Default",
+        r"\bfunc\s+[A-Z]\w*\(",  # exported functions as entry points
     ],
     "exit": [
         r"\bctx\.JSON",
@@ -46,6 +49,7 @@ PATTERNS = {
         r"\breturn\s+fmt\.Sprintf",
         r"\btemplate\.Execute",
         r"\brender\.(HTML|JSON|Template)",
+        r"\bfmt\.Fprintf",
     ],
     "read": [
         r"\bdb\.(Find|Select|Query|QueryRow|QueryRows|First|Where)",
@@ -61,6 +65,23 @@ PATTERNS = {
         r"\bjson\.Marshal",
         r"\bioutil\.WriteFile",
     ],
+    "channel": [  # treat channel communication as data movement
+        r"<-chan",
+        r"chan\s*<-",
+    ],
+    "goroutine": [  # each 'go' spawn counts
+        r"\bgo\s+\w+\(",
+    ]
+}
+
+# Multipliers to adjust CFP impact for specific movements
+MULTIPLIERS = {
+    "entry": 1,
+    "exit": 1,
+    "read": 1,
+    "write": 1,
+    "channel": 1,
+    "goroutine": 1,
 }
 
 # ----------------------------------------------------------
@@ -70,7 +91,6 @@ def detect_movements(repo_path):
     """Scan a Go repository and count COSMIC movement types."""
     counts = {k: 0 for k in PATTERNS}
     for root, _, files in os.walk(repo_path):
-        # Skip vendor, third-party, or generated directories
         if any(skip in root for skip in ["vendor", "third_party", "generated"]):
             continue
         for f in files:
@@ -81,7 +101,8 @@ def detect_movements(repo_path):
                     text = src.read()
                     for move, patterns in PATTERNS.items():
                         for p in patterns:
-                            counts[move] += len(re.findall(p, text, re.IGNORECASE))
+                            matches = len(re.findall(p, text, re.IGNORECASE))
+                            counts[move] += matches
             except Exception:
                 continue
     return counts
@@ -95,7 +116,7 @@ def process_repo(row):
         return None
 
     movements = detect_movements(repo_path)
-    total_cfp = sum(movements.values())
+    total_cfp = sum(movements[k] * MULTIPLIERS.get(k, 1) for k in movements)
 
     total_eloc = row.get("total_eloc", row.get("total", 0))
     code = row.get("code", 0)
@@ -125,7 +146,7 @@ def main():
     df = pd.read_csv(INPUT_FILE)
     results = []
 
-    print(f"🔍 Estimating COSMIC Function Points for {len(df)} repositories...")
+    print(f"🔍 Estimating enhanced COSMIC Function Points for {len(df)} repositories...")
 
     max_workers = min(32, os.cpu_count() * 2)
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
@@ -137,7 +158,7 @@ def main():
 
     final_df = pd.DataFrame(results)
     final_df.to_csv(OUTPUT_FILE, index=False)
-    print(f"✅ COSMIC Function Points written to {OUTPUT_FILE}")
+    print(f"✅ Enhanced COSMIC Function Points written to {OUTPUT_FILE}")
     print(f"📊 Includes metrics: cfp_total, eloc_per_cfp, cfp_per_kloc")
 
 
